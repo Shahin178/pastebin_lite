@@ -1,38 +1,41 @@
 import { redis } from "@/lib/redis";
-
-function now(req) {
-  if (process.env.TEST_MODE === "1") {
-    const h = req.headers.get("x-test-now-ms");
-    if (h) return Number(h);
-  }
-  return Date.now();
-}
+import { NextResponse } from "next/server";
+import { getNow } from "@/lib/time";
 
 export async function GET(req, { params }) {
-  const raw = await redis.get(`paste:${params.id}`);
-  if (!raw) return Response.json({ error: "Not found" }, { status: 404 });
+  const { id } = await params; // ✅ FIXED
+  const key = `paste:${id}`;
 
-  const paste = JSON.parse(raw);
-  const current = now(req);
+  const paste = await redis.hgetall(key);
 
-  if (paste.expires_at && current >= paste.expires_at) {
-    return Response.json({ error: "Expired" }, { status: 404 });
+  if (!paste || !paste.content) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  if (paste.max_views && paste.views >= paste.max_views) {
-    return Response.json({ error: "View limit exceeded" }, { status: 404 });
+  const now = getNow(req);
+
+  if (paste.expires_at && now >= Number(paste.expires_at)) {
+    await redis.del(key);
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  paste.views += 1;
-  await redis.set(`paste:${params.id}`, JSON.stringify(paste));
+  if (paste.max_views && Number(paste.views) >= Number(paste.max_views)) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
 
-  return Response.json({
+  // ✅ atomic increment
+  const views = await redis.hincrby(key, "views", 1);
+
+  const remaining =
+    paste.max_views === ""
+      ? null
+      : Math.max(0, Number(paste.max_views) - views);
+
+  return NextResponse.json({
     content: paste.content,
-    remaining_views: paste.max_views
-      ? Math.max(paste.max_views - paste.views, 0)
-      : null,
+    remaining_views: remaining,
     expires_at: paste.expires_at
-      ? new Date(paste.expires_at).toISOString()
+      ? new Date(Number(paste.expires_at)).toISOString()
       : null,
   });
 }

@@ -5,23 +5,29 @@ export default async function PastePage({ params }) {
   const { id } = await params;
   const key = `paste:${id}`;
 
-  const paste = await redis.get(key);
-  if (!paste) notFound();
+  // Fetch the hash
+  const paste = await redis.hgetall(key);
 
-  // Expiry check
-  if (paste.expires_at && Date.now() >= paste.expires_at) {
+  // If paste doesn't exist
+  if (!paste || !paste.content) notFound();
+
+  const now = Date.now();
+
+  // Check TTL
+  const expiresAt = paste.expires_at ? Number(paste.expires_at) : null;
+  if (expiresAt && now >= expiresAt) {
+    // Delete expired paste
     await redis.del(key);
     notFound();
   }
 
-  // View limit check
-  if (paste.max_views !== null && paste.views >= paste.max_views) {
+  // Atomically increment views
+  const views = await redis.hincrby(key, "views", 1);
+
+  const maxViews = paste.max_views ? Number(paste.max_views) : null;
+  if (maxViews && views > maxViews) {
     notFound();
   }
-
-  // ✅ Increment views safely
-  paste.views += 1;
-  await redis.set(key, paste);
 
   return (
     <main className="max-w-3xl mx-auto p-6">

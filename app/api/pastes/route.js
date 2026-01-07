@@ -1,51 +1,57 @@
 import { redis } from "@/lib/redis";
 import { nanoid } from "nanoid";
+import { NextResponse } from "next/server";
+import { getNow } from "@/lib/time";
 
 export async function POST(req) {
-  const body = await req.json().catch(() => null);
+  let body;
 
-  if (
-    !body?.content ||
-    typeof body.content !== "string" ||
-    !body.content.trim()
-  ) {
-    return Response.json({ error: "Invalid content" }, { status: 400 });
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  const { content, ttl_seconds, max_views } = body;
+
+  if (!content || typeof content !== "string" || !content.trim()) {
+    return NextResponse.json({ error: "content is required" }, { status: 400 });
   }
 
   if (
-    body.ttl_seconds !== undefined &&
-    (!Number.isInteger(body.ttl_seconds) || body.ttl_seconds < 1)
+    ttl_seconds !== undefined &&
+    (!Number.isInteger(ttl_seconds) || ttl_seconds < 1)
   ) {
-    return Response.json({ error: "Invalid ttl_seconds" }, { status: 400 });
+    return NextResponse.json(
+      { error: "ttl_seconds must be >= 1" },
+      { status: 400 }
+    );
   }
 
   if (
-    body.max_views !== undefined &&
-    (!Number.isInteger(body.max_views) || body.max_views < 1)
+    max_views !== undefined &&
+    (!Number.isInteger(max_views) || max_views < 1)
   ) {
-    return Response.json({ error: "Invalid max_views" }, { status: 400 });
+    return NextResponse.json(
+      { error: "max_views must be >= 1" },
+      { status: 400 }
+    );
   }
 
   const id = nanoid(8);
-  const createdAt = Date.now();
-  const expiresAt = body.ttl_seconds
-    ? createdAt + body.ttl_seconds * 1000
-    : null;
+  const now = getNow(req); 
+  const expiresAt = ttl_seconds ? now + ttl_seconds * 1000 : "";
 
-  await redis.set(
-    `paste:${id}`,
-    JSON.stringify({
-      id,
-      content: body.content,
-      created_at: createdAt,
-      expires_at: expiresAt,
-      max_views: body.max_views ?? null,
-      views: 0,
-    })
-  );
+  await redis.hset(`paste:${id}`, {
+    content,
+    created_at: now,
+    expires_at: expiresAt,
+    max_views: max_views ?? "",
+    views: 0,
+  });
 
-  return Response.json({
+  return NextResponse.json({
     id,
-    url: `${process.env.BASE_URL}/p/${id}`,
+    url: `${process.env.NEXT_PUBLIC_BASE_URL}/p/${id}`,
   });
 }
